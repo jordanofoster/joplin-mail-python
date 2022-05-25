@@ -2,23 +2,23 @@
 Python script that parses e-mail and attachments from _maildir_ files into markdown and imports them into Joplin using the Web Clipper's REST API. Work-in-Progress.
 
 ## Dependencies:
-- `mailbox` https://docs.python.org/3/library/mailbox.html
+- [`mailbox`](https://docs.python.org/3/library/mailbox.html)
   - Currently used for parsing maildir files obtained through `getmail`. 
 - `os`
 - `re`
   - Used to search within email subject for symbols, similarly to [Evernote's implementation](https://help.evernote.com/hc/en-us/articles/209005347-Save-emails-into-Evernote).
-- `joppy`
-  -  A Pythonic [API Client](https://github.com/marph91/joppy) for the [Joplin Web Clipper](https://joplinapp.org/api/references/rest_api/)
-- `markdownify` https://github.com/matthewwithanm/python-markdownify 
+- [`joppy`](https://github.com/marph91/joppy)
+  -  A Pythonic API Client for the [Joplin Web Clipper](https://joplinapp.org/api/references/rest_api/)
+- [`markdownify`](https://github.com/matthewwithanm/python-markdownify)
   -  For handling `html` emails with (relative) correctness.
 
 Developed using `python 3.10.4`.
 
 ## Current Roadblocks
 
-- `getmail` is a major portability issue.
-  - Requires [Cygwin](https://www.cygwin.com/) to be installed on Windows machines.]
-  - Depends on Python 2. `getmail6` attempts to port the module to 3.x, but it was buggy in my experience.
+- [`getmail`](https://pyropus.ca./software/getmail/) is a major portability issue.
+  - Requires [Cygwin](https://www.cygwin.com/) to be installed on Windows machines.
+  - Depends on Python 2. [`getmail6`](https://github.com/getmail6/getmail6) attempts to port the module to 3.x, but it was buggy in my experience.
 
 - Handling weird HTML from certain e-mail providers (Looking at you, outlook!)
   - [`html-sanitizer`](https://github.com/matthiask/html-sanitizer/) seemed to convert a lot of this oddness, but left random artefacts within my test e-mail.
