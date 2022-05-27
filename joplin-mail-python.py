@@ -1,29 +1,52 @@
 import mailbox
 import os
 import re
-import json
 from joppy import api, tools
 from markdownify import markdownify as md
+from html_sanitizer import Sanitizer
+from dotenv import load_dotenv
 
-apiInstance = api.Api(token="4dd0092ea436f608e4281c8c75f7a4840ee78cd499e63ae60aa9fce5ac320b1400d35f6007ef90471c75c25f2228ac4e8dde8dd98650b75cdab260dace996466")
+load_dotenv()
+apiInstance = api.Api(token=os.getenv('JOPLIN_TOKEN'))
+rootDir = os.getenv('ROOTDIR')
+
+sanitizerInstance = Sanitizer({
+    'tags': {
+            'a', 'b', 'blockquote', 'br', 'code', 'em', 
+            'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'img',
+            'li', 'p', 'q', 'strong', 'sub', 'sup', 'table',
+            'tbody', 'td', 'th', 'thead', 'title', 'tr',
+            'u', 'ul', 'mark', 'span', 'o:p'
+    },
+    'empty': {
+        'b','blockquote','br','code','em','h1','h2','h3','h4',
+        'h5','h6','li','p','q','strong','sub','sup','u','ul', 'span', 'o:p',
+    },
+    "keep_typographic_whitespace":True,
+    "element_preprocessors":[],
+})
+
 if apiInstance.ping().status_code != 200: #Check if Joplin is running
     raise Exception("Joplin Web Clipper service not running.")
 else:
     print("Joplin Web Clipper running!")
 
-    folderList = apiInstance.get_all_folders()
+    folderList = apiInstance.get_all_notebooks()
     tagList = apiInstance.get_all_tags()
 
     tagRegex = '(?<=\s\#)\S.+?(?=\s[\!\#\@]|$)'
     folderRegex = '(?<=\s\@)\S.+?(?=\s[\!\#\@]|$)'
     reminderRegex = '(?<=\s\!)\S.+?(?=\s[\!\#\@]|$)'
-
+    bpRegex = '(if !supportLists\d\.)\s*\n(endif)'
+    cidRegex = '(?<=src=\")(cid:\w+\.\w+@\w+\.\w+)(?=\")'
+    base64Regex = '(?<=src=\")(data:\w+\/[\w\.\-]+;base64,[\w\-\_]+\=*)(?=\")' #Opinionated on RFC 4648 §5 (base64url)
     folderID = 'a662e883ace74abd840c31e44f3e8739'
     folderName = ""
     tags = ""
 
     htmlFound = False
-    maildir = mailbox.Maildir('C:\cygwin64\home\Jordan Foster\maildir')
+    maildir = mailbox.Maildir(f'{rootDir}\maildir')
+    outputdir = (f'{rootDir}\output')
     keyIter = maildir.iterkeys()
     msg = mailbox.MaildirMessage
     while True:
@@ -34,13 +57,22 @@ else:
             tagSet = set(re.findall(tagRegex, msgSubject))
             folderSet = set(re.findall(folderRegex, msgSubject))
             reminderSet = set(re.findall(reminderRegex, msgSubject))
+            inlineList = []
+            attachmentList = []
+
             noteDict = dict({
                 'folders':[],
                 'tags':[],
                 'reminders':[],
             })
 
-            #print(folderSet, tagSet, reminderSet)
+            msgDict = dict({
+                'to':msg.__getitem__('To'),
+                'subject':msg.__getitem__('Subject'),
+                'from':msg.__getitem__('From'),
+                'date':msg.__getitem__('Date'),
+                'message-id':msg.__getitem__('Message-id'),
+            })
 
             for element in folderSet:
                 folderPresent = False
@@ -70,25 +102,61 @@ else:
             ***\n"""
 
             for part in msg.walk():
-                if part.get_content_type() == 'text/plain' and htmlFound == False:
-                    filePath = os.path.join('C:\cygwin64\home\Jordan Foster\\', f'{msg.get_filename()}-{part.get_content_subtype()}.txt')
-                    noteContents = part.get_payload()
-                    writer = open(filePath, "w")
-                    writer.write(noteContents)
-                    writer.close()
+                if part.get_content_disposition() != None:
+                    if part.get_content_disposition() == 'inline':
+                        inlineName = part.get_param('name')
+                        inlineDir = os.path.join(outputdir, inlineName)
+
+                        with open(inlineDir, 'wb') as inline:
+                            inline.write(part.get_payload(decode=True))
+
+                        inlineList.append((part.get_param('name'), inlineDir))
+
+                    elif part.get_content_disposition() == 'attachment':
+                        attachmentName = part.get_param('name')
+                        attachmentDir = os.path.join(outputdir, attachmentName)
+
+                        with open(attachmentDir, 'wb') as attachment:
+                            attachment.write(part.get_payload(decode=True))
+
+                        attachmentList.append((part.get_param('name'), attachmentDir))
+                
+                elif part.get_content_type() == 'text/plain':
+                    msgDict['plaintext'] = part.get_payload(decode=True)
+                    with open(os.path.join(outputdir, 'plaintext.txt'), 'wb') as plaintextWriter:
+                        plaintextWriter.write(msgDict.get('plaintext'))
                 elif part.get_content_type() == 'text/html':
-                    htmlFound = True
-                    filePath = os.path.join('C:\cygwin64\home\Jordan Foster\\', f'{msg.get_filename()}-{part.get_content_subtype()}.md')
-                    noteContents = md(part.get_payload(decode=True))
-                if part.get_content_disposition() == 'attachment':
-                    filePath = os.path.join('C:\cygwin64\home\Jordan Foster\\', part.get_filename())
-                    attachmentWriter = open(filePath, 'wb')
-                    attachmentWriter.write(part.get_payload(decode=True))
-                    attachmentWriter.close()            
-            dirStr = os.path.join('C:\cygwin64\home\Jordan Foster', 'output.md')
-            writer = open(dirStr, "wb")
-            writer.write(noteContents.encode('utf-8'))
-            writer.close()
+                    msgDict['html'] = part.get_payload(decode=True)
+                else:
+                    print(part.get_content_type())
+            
+            msgDict['inline'] = inlineList
+            msgDict['attachments'] = attachmentList
+
+            for cidEmbedStr in set(re.findall(rb'(?<=src=")(cid:\w+\.\w+@\w+\.\w+)(?=")', msgDict.get('html'))):
+                for inlineTuple in msgDict.get('inline'):
+                    encodedFilename = inlineTuple[0].encode('utf-8')
+                    if cidEmbedStr.__contains__ (encodedFilename):
+                        updatedHTML = msgDict.get('html').replace(cidEmbedStr, encodedFilename)
+                        msgDict['html'] = updatedHTML
+            
+            for base64EmbedStr in set(re.findall(rb'(?<=src=")(data:\w+\/[\w\.\-]+;base64,[\w\-\_]+\=*)(?=")', msgDict.get('html'))):
+                for inlineTuple in msgDict.get('inline'):
+                    encodedBase64 = tools.encode_base64(inlineTuple[1]).encode('utf-8')
+                    if base64EmbedStr.__contains__(encodedBase64):
+                        updatedHTML = msgDict.get('html').replace(base64EmbedStr, encodedBase64)
+                        msgDict['html'] = updatedHTML
+            
+            with open(os.path.join(outputdir, 'HTML.html'), 'wb') as htmlWriter:
+                htmlWriter.write(msgDict.get('html'))
+
+            with open(os.path.join(outputdir, 'html_sanitized.html'), 'w') as sanitizedWriter:
+                sanitizedHTML = sanitizerInstance.sanitize(msgDict.get('html').decode('utf-8'))
+                sanitizedWriter.write(sanitizedHTML)
+
+            with open(os.path.join(outputdir, 'markdown.md'), 'w') as mdWriter:
+                mdWriter.write(md(sanitizedHTML))
+
         except KeyError as ke:
             print(ke)
             break
