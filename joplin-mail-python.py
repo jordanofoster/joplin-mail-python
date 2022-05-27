@@ -14,16 +14,18 @@ sanitizerInstance = Sanitizer({
     'tags': {
             'a', 'b', 'blockquote', 'br', 'code', 'em', 
             'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'img',
-            'li', 'p', 'q', 'strong', 'sub', 'sup', 'table',
+            'li', 'q', 'strong', 'sub', 'sup', 'table',
             'tbody', 'td', 'th', 'thead', 'title', 'tr',
-            'u', 'ul', 'mark', 'span', 'o:p'
+            'u', 'ul', 'mark', 'p'
+    },
+    'attributes': {
+        'a': ('href','name','target','title','id','rel','alt'),
+        'img': ('border','width','height','src','alt')
     },
     'empty': {
         'b','blockquote','br','code','em','h1','h2','h3','h4',
-        'h5','h6','li','p','q','strong','sub','sup','u','ul', 'span', 'o:p',
+        'h5','h6','li','q','strong','sub','sup','u','ul','img'
     },
-    "keep_typographic_whitespace":True,
-    "element_preprocessors":[],
 })
 
 if apiInstance.ping().status_code != 200: #Check if Joplin is running
@@ -133,18 +135,18 @@ else:
             msgDict['inline'] = inlineList
             msgDict['attachments'] = attachmentList
 
-            for cidEmbedStr in set(re.findall(rb'(?<=src=")(cid:\w+\.\w+@\w+\.\w+)(?=")', msgDict.get('html'))):
+            for cidMatch in set(re.findall(rb'(?<=src=")(cid:\w+\.\w+@\w+\.\w+)(?=")', msgDict.get('html'))):
                 for inlineTuple in msgDict.get('inline'):
                     encodedFilename = inlineTuple[0].encode('utf-8')
-                    if cidEmbedStr.__contains__ (encodedFilename):
-                        updatedHTML = msgDict.get('html').replace(cidEmbedStr, encodedFilename)
+                    if cidMatch.__contains__ (encodedFilename):
+                        updatedHTML = msgDict.get('html').replace(cidMatch, encodedFilename)
                         msgDict['html'] = updatedHTML
             
-            for base64EmbedStr in set(re.findall(rb'(?<=src=")(data:\w+\/[\w\.\-]+;base64,[\w\-\_]+\=*)(?=")', msgDict.get('html'))):
+            for base64Match in set(re.findall(rb'(?<=src=")(data:\w+\/[\w\.\-]+;base64,[\w\-\_]+\=*)(?=")', msgDict.get('html'))):
                 for inlineTuple in msgDict.get('inline'):
                     encodedBase64 = tools.encode_base64(inlineTuple[1]).encode('utf-8')
-                    if base64EmbedStr.__contains__(encodedBase64):
-                        updatedHTML = msgDict.get('html').replace(base64EmbedStr, encodedBase64)
+                    if base64Match.__contains__(encodedBase64):
+                        updatedHTML = msgDict.get('html').replace(base64Match, encodedBase64)
                         msgDict['html'] = updatedHTML
             
             with open(os.path.join(outputdir, 'HTML.html'), 'wb') as htmlWriter:
@@ -155,7 +157,29 @@ else:
                 sanitizedWriter.write(sanitizedHTML)
 
             with open(os.path.join(outputdir, 'markdown.md'), 'w') as mdWriter:
-                mdWriter.write(md(sanitizedHTML))
+                baseMD = md(sanitizedHTML)
+                mdWriter.write(baseMD)
+
+            sourceStr = ""
+            if msgDict.get('html') != None:
+                sourceStr += f'[HTML](:/{apiInstance.add_resource(os.path.join(outputdir, "HTML.html"))})\n'
+            if msgDict.get('plaintext') != None:
+                sourceStr += f'[TXT](:/{apiInstance.add_resource(os.path.join(outputdir, "plaintext.txt"))})\n'
+
+            joplinMD = sourceStr + '\n***\n' +baseMD
+
+            for inlineTuple in msgDict.get('inline'):
+                if joplinMD.__contains__(inlineTuple[0]):
+                    joplinMD = joplinMD.replace(inlineTuple[0], f":/{apiInstance.add_resource(inlineTuple[1])}")
+            
+            joplinMD += '\n***\n'
+            for attachmentTuple in msgDict.get('attachments'):
+                joplinMD += f'[{attachmentTuple[0]}](:/{apiInstance.add_resource(attachmentTuple[1])})\n'
+
+
+            
+            joplinMD += sourceStr
+            apiInstance.add_note(title=msgDict.get('subject'), body=joplinMD)
 
         except KeyError as ke:
             print(ke)
